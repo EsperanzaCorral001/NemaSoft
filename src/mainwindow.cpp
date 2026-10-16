@@ -189,6 +189,8 @@ MainWindow::MainWindow(QWidget* parent)
 
 
 MainWindow::~MainWindow() {
+    m_xyzStage.stopHoming();
+
     // Stop and cleanup timer
     if (m_positionUpdateTimer) {
         m_positionUpdateTimer->stop();
@@ -228,6 +230,9 @@ MainWindow::~MainWindow() {
         m_traverserThread->quit();
         m_traverserThread->wait();
     }
+
+    m_xyzStage.shutdown();
+    m_xyzStage.setLogCallback({});
     //delete m_traverser;
 }
 
@@ -293,7 +298,9 @@ QGroupBox* MainWindow::setupMovementUI() {
     m_confirmAdjustmentBtn->setEnabled(false);
 	m_Focus_cam1 = new QPushButton("Focus Cam 1");
     m_Focus_cam2 = new QPushButton("Focus Cam 2");
-	m_homeBtn = new QPushButton("🏠");
+	//m_homeBtn = new QPushButton("🏠");
+    m_homeBtn = new QPushButton("Home XYZ");
+    m_homeBtn->setToolTip("Find the stage home switches, in Z / Y / X order");
 	
 
     m_leftFastBtn->setFixedSize(30, 30);
@@ -317,7 +324,7 @@ QGroupBox* MainWindow::setupMovementUI() {
     m_confirmAdjustmentBtn->setFixedSize(30, 30);
     m_Focus_cam1->setFixedSize(100,30);
     m_Focus_cam2->setFixedSize(100, 30);
-    m_homeBtn->setFixedSize(30, 30);
+    m_homeBtn->setFixedSize(100, 30);
 
     movementLayout->addWidget(m_slant1Btn, 1, 1);
     movementLayout->addWidget(m_upFastBtn, 0, 2);
@@ -602,6 +609,27 @@ void MainWindow::updateFrame(const QImage& img, int camType) {
 }
 
 void MainWindow::updatePositionDisplay() {
+
+    if (m_homingUiActive && !m_xyzStage.isHoming()) {
+        m_homingUiActive = false;
+
+        for (const auto& control : m_homingControlStates) {
+            control.first->setEnabled(control.second);
+        }
+
+        m_homingControlStates.clear();
+
+        m_homeBtn->setEnabled(true);
+        m_homeBtn->setText("Home XYZ");
+
+        if (m_xyzStage.positionUncertain()) {
+            log(
+                "Position is unconfirmed after interrupted/failed homing. "
+                "Check the reported fault and home successfully before jogging.",
+                "WARNING"
+            );
+        }
+    }
     // Check if values have changed to avoid unnecessary updates
     if (m_prevX != globle_vars.current_x.load() ||
         m_prevY != globle_vars.current_y.load() ||
@@ -1673,7 +1701,43 @@ void MainWindow::onConfirmAdjustmentClicked() {
 }
 
 void MainWindow::onHomeClicked() {
-    m_xyzStage.home();
+    if (m_xyzStage.isHoming()) {
+        m_xyzStage.stopHoming();
+        m_homeBtn->setText("Stopping...");
+        m_homeBtn->setEnabled(false);
+        return;
+    }
+
+    if (m_traverserThread) {
+        log("Finish or abort traversal before homing", "WARNING");
+        return;
+    }
+
+    if (!m_xyzStage.home()) return;
+
+    m_homingUiActive = true;
+
+    const QList<QWidget*> controls{
+        m_leftFastBtn, m_leftSlowBtn, m_rightFastBtn, m_rightSlowBtn,
+        m_upFastBtn, m_upSlowBtn, m_downFastBtn, m_downSlowBtn,
+        m_zUpBtn, m_zUpFastBtn, m_zDownBtn, m_zDownFastBtn,
+        m_slant1Btn, m_slant2Btn, m_slant3Btn, m_slant4Btn,
+        m_goToPositionBtn, m_Focus_cam1, m_Focus_cam2,
+        m_confirmAdjustmentBtn, m_predictMicroImg, m_trivarsePath,
+        m_abortPathBtn, m_resumePathBtn
+    };
+
+    for (auto* control : controls) {
+        if (!control) continue;
+
+        m_homingControlStates.append(
+            qMakePair(control, control->isEnabled())
+        );
+
+        control->setEnabled(false);
+    }
+
+    m_homeBtn->setText("Stop Home");
 }
 
 void MainWindow::onTraversalFinished(const QString& message) {
@@ -1766,6 +1830,11 @@ void MainWindow::onFocusCam2() {
 
 
 void MainWindow::onTriversePath() {
+    if (m_xyzStage.isHoming() || m_xyzStage.positionUncertain()) {
+        log("Traversal requires a confirmed, idle stage", "WARNING");
+        return;
+    }
+
         log("Path button clicked.", "INFO");
         if (m_transformMatrix.empty()) {
             log("Transformation matrix not set. Please calculate transformation matrix first.", "WARNING");

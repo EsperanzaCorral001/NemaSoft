@@ -1,6 +1,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QList>
+#include <QPair>
 #include <QMainWindow>
 #include <QThread>
 #include <QLabel>
@@ -237,8 +239,7 @@ private:
 	//int m_microCam1Index = 2;
 	//int m_microCam2Index = 3;
 
-	XYZStage m_xyzStage;
-	XYZStage n_xyzStage;
+    XYZStage m_xyzStage; // One stage instance owns the serial connection.
 
     // Movement control buttons
     QPushButton* m_leftFastBtn = nullptr;
@@ -265,6 +266,10 @@ private:
 	QPushButton* m_abortPathBtn = nullptr;
     QPushButton* m_resumePathBtn = nullptr;
 	QPushButton* m_homeBtn = nullptr;
+
+    bool m_homingUiActive = false;
+    QList<QPair<QWidget*, bool>> m_homingControlStates;
+    
     QComboBox* m_macroComboBox;
     QComboBox* m_microComboBox;
     QComboBox* m_trivarsePath;
