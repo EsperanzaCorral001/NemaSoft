@@ -1,5 +1,6 @@
 #include "XYZStage.h"
 #include "logger.h"
+#include "HomingSequence.h"
 
 // Global variable definition
 GlobalVars globle_vars;
@@ -33,8 +34,15 @@ XYZStage::XYZStage(const std::string& portName)
 }
 
 // Destructor
+
 XYZStage::~XYZStage() {
+    shutdown();
+}
+
+void XYZStage::shutdown() {
     log("Shutting down XYZStage...", "INFO");
+
+    stopHoming();
 
     // Signal worker thread to stop
     {
@@ -44,6 +52,11 @@ XYZStage::~XYZStage() {
 
     // Wake up worker thread
     m_condition.notify_one();
+
+    // Finish the homing thread before closing its serial connection.
+    if (m_homeThread.joinable()) {
+        m_homeThread.join();
+    }
 
     // Wait for worker thread to finish
     if (m_workerThread.joinable()) {
@@ -86,6 +99,7 @@ void XYZStage::worker() {
                 // Get command from queue
                 currentCommand = m_commandQueue.front();
                 m_commandQueue.pop();
+                m_commandInProgress = true;
 
                 log(QString("Worker dequeued command: dx=%1, dy=%2, dz=%3")
                     .arg(currentCommand.dx)
@@ -109,6 +123,11 @@ void XYZStage::worker() {
                 log(QString("Exception in _move(): %1").arg(e.what()), "CRITICAL");
             } catch (...) {
                 log("Unknown exception in _move()", "CRITICAL");
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_queueMutex);
+                m_commandInProgress = false;
             }
 
             // Notify if blocking call is waiting
@@ -135,17 +154,33 @@ void XYZStage::worker() {
 }
 
 // Public move method (non-blocking, queues command)
-void XYZStage::move(double dx, double dy, double dz, double velocity_x, double velocity_y, double velocity_z) {
+bool XYZStage::move(double dx, double dy, double dz, double velocity_x, double velocity_y, double velocity_z) {
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
-        m_commandQueue.push({ dx, dy, dz, velocity_x, velocity_y, velocity_z });
 
-        log(QString("Queued move: dx=%1, dy=%2, dz=%3")
-            .arg(dx).arg(dy).arg(dz), "INFO");
+        if (m_stopWorker || m_homing || m_positionUncertain) {
+            log(
+                "Move rejected: stage is closing, homing, or needs "
+                "a successful home after an interrupted search",
+                "WARNING"
+            );
+            return false;
+        }
+
+        m_commandQueue.push({
+            dx, dy, dz,
+            velocity_x, velocity_y, velocity_z
+        });
+
+        log(
+            QString("Queued move: dx=%1, dy=%2, dz=%3")
+                .arg(dx).arg(dy).arg(dz),
+            "INFO"
+        );
     }
 
-    // Notify worker thread
     m_condition.notify_one();
+    return true;
 }
 
 // Blocking move method (waits for completion)
@@ -156,7 +191,10 @@ void XYZStage::move_and_wait(double dx, double dy, double dz, double velocity_x,
     m_isWaitingForMoveCompletion = true;
 
     // Queue the command
-    move(dx, dy, dz, velocity_x, velocity_y, velocity_z);
+    if (!move(dx, dy, dz, velocity_x, velocity_y, velocity_z)) {
+        m_isWaitingForMoveCompletion.store(false);
+        return;
+    }
 
     // Wait for completion with timeout to avoid indefinite hangs
     log("move_and_wait: Waiting for completion...", "INFO");
@@ -174,13 +212,67 @@ void XYZStage::move_and_wait(double dx, double dy, double dz, double velocity_x,
 }
 
 // Home command
-void XYZStage::home() {
-    log("Home command called", "INFO");
-    _home();
+bool XYZStage::home() {
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+
+        if (
+            m_serialHandle == INVALID_HANDLE_VALUE ||
+            m_stopWorker ||
+            m_homing ||
+            m_commandInProgress ||
+            !m_commandQueue.empty()
+        ) {
+            log(
+                "Home rejected: check serial connection and wait "
+                "for movement/traversal to finish",
+                "WARNING"
+            );
+            return false;
+        }
+
+        m_homing.store(true);
+        m_cancelHome.store(false);
+    }
+
+    if (m_homeThread.joinable()) {
+        m_homeThread.join();
+    }
+
+    try {
+        m_homeThread = std::thread([this] {
+            try {
+                _home();
+            }
+            catch (const std::exception& e) {
+                m_positionUncertain.store(true);
+
+                log(
+                    QString("Homing exception: %1").arg(e.what()),
+                    "CRITICAL"
+                );
+            }
+            catch (...) {
+                m_positionUncertain.store(true);
+                log("Unexpected homing exception", "CRITICAL");
+            }
+
+            m_homing.store(false);
+        });
+    }
+    catch (...) {
+        m_homing.store(false);
+        log("Could not start homing thread", "CRITICAL");
+        return false;
+    }
+
+    return true;
 }
 
 // Core movement function
 XYZStage::Position XYZStage::_move(double x, double y, double z, double vx, double vy, double vz, char direction) {
+
+    std::lock_guard<std::recursive_mutex> serialLock(m_serialMutex);
 
     if (m_serialHandle == INVALID_HANDLE_VALUE) {
         log("SIMULATION MODE - No actual movement", "WARNING");
@@ -339,50 +431,183 @@ XYZStage::Position XYZStage::_move(double x, double y, double z, double vx, doub
 }
 
 // Home function
-XYZStage::Position XYZStage::_home() {
-    if (m_serialHandle == INVALID_HANDLE_VALUE) {
-        log("Cannot home - no serial connection", "CRITICAL");
-        return position;
+std::string XYZStage::exchangeHomeCommand(const std::string& command) {
+    DWORD written = 0;
+
+    log(
+        QString("Home TX: %1")
+            .arg(QString::fromStdString(command).trimmed()),
+        "DEBUG"
+    );
+
+    if (
+        !WriteFile(
+            m_serialHandle,
+            command.data(),
+            static_cast<DWORD>(command.size()),
+            &written,
+            NULL
+        ) ||
+        written != command.size()
+    ) {
+        return {};
     }
 
-    log("Starting homing sequence...", "INFO");
+    std::string reply;
 
-    // Send homing commands
-    const char* commands[] = {
-        "/1aM1f1aM2f1aM3f1R\r\n",
-        "/1aM1N1Z10000R\r\n",
-        "/1aM2N1Z10000R\r\n",
-        "/1aM3N1Z10000R\r\n",
-        "/1z0,0,0R\r\n"
-    };
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(1500);
 
-    for (int i = 0; i < 5; i++) {
-        DWORD bytesWritten;
-        if (!WriteFile(m_serialHandle, commands[i], strlen(commands[i]), &bytesWritten, NULL)) {
-            log(QString("Failed to send home command %1").arg(i + 1), "CRITICAL");
-            return position;
+    while (std::chrono::steady_clock::now() < deadline) {
+        DWORD errors = 0;
+        COMSTAT status{};
+
+        if (
+            !ClearCommError(m_serialHandle, &errors, &status) ||
+            errors
+        ) {
+            return {};
         }
 
-        log(QString("Home command %1 sent").arg(i + 1), "INFO");
-        std::this_thread::sleep_for(std::chrono::seconds(10));
+        if (status.cbInQue) {
+            char buffer[256];
+            DWORD received = 0;
+
+            const DWORD requested = (std::min)(
+                status.cbInQue,
+                static_cast<DWORD>(sizeof(buffer))
+            );
+
+            if (
+                !ReadFile(
+                    m_serialHandle,
+                    buffer,
+                    requested,
+                    &received,
+                    NULL
+                )
+            ) {
+                return {};
+            }
+
+            reply.append(buffer, received);
+
+            if (reply.find('\x03') != std::string::npos) {
+                log(
+                    QString("Home RX: %1")
+                        .arg(QString::fromStdString(reply)),
+                    "DEBUG"
+                );
+
+                return reply;
+            }
+        }
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10)
+        );
     }
 
-    log("Homing complete", "INFO");
+    log(
+        "Timed out reading homing controller response",
+        "CRITICAL"
+    );
 
-    // Reset position (store atomically)
-    globle_vars.current_x.store(0.0);
-    globle_vars.current_y.store(0.0);
-    globle_vars.current_z.store(0.0);
+    return {};
+}
 
-    position.x = 0;
-    position.y = 0;
-    position.z = 0;
+void XYZStage::_home() {
+    std::lock_guard<std::recursive_mutex> serialLock(
+        m_serialMutex
+    );
 
-    return position;
+    if (!PurgeComm(m_serialHandle, PURGE_RXCLEAR)) {
+        log(
+            "Cannot clear stale serial replies before homing",
+            "CRITICAL"
+        );
+        return;
+    }
+
+    log(
+        QString(
+            "Homing XYZ using existing connection on %1; "
+            "order Z, Y, X"
+        ).arg(QString::fromStdString(port)),
+        "INFO"
+    );
+
+    homing::IO io;
+
+    io.exchange = [this](const std::string& cmd) {
+        return exchangeHomeCommand(cmd);
+    };
+
+    io.cancelled = [this] {
+        return m_cancelHome.load() || m_stopWorker.load();
+    };
+
+    io.report = [this](const std::string& text) {
+        log(QString::fromStdString(text));
+    };
+
+    io.milliseconds = [] {
+        return std::chrono::duration_cast<
+            std::chrono::milliseconds
+        >(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    };
+
+    io.pause = [](int ms) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(ms)
+        );
+    };
+
+    const auto result = homing::run(io);
+
+    if (!result.success) {
+        if (result.motionStarted) {
+            m_positionUncertain.store(true);
+        }
+
+        log(
+            QString("Home failed: %1")
+                .arg(QString::fromStdString(result.message)),
+            "CRITICAL"
+        );
+
+        return;
+    }
+
+    position.x =
+        static_cast<double>(result.positions[0]) / scale.x;
+
+    position.y =
+        static_cast<double>(result.positions[1]) / scale.y;
+
+    position.z =
+        static_cast<double>(result.positions[2]) / scale.z;
+
+    globle_vars.current_x.store(position.x);
+    globle_vars.current_y.store(position.y);
+    globle_vars.current_z.store(position.z);
+
+    m_positionUncertain.store(false);
+
+    log(
+        "Home reference updated from controller readback. "
+        "Home is a reference point, not the slide center.",
+        "INFO"
+    );
 }
 
 // Get position
 XYZStage::Position XYZStage::getPosition() {
+    std::lock_guard<std::recursive_mutex> serialLock(m_serialMutex);
+
     if (m_serialHandle == INVALID_HANDLE_VALUE) {
         return position;
     }

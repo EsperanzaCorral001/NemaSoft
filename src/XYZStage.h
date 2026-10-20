@@ -16,6 +16,10 @@
 #include "utils.h"
 #include <QString>
 #include <functional>
+#include <vector>
+#include <sstream>
+#include <cctype>
+#include <QDebug>
 
 // Global variables structure
 struct GlobalVars {
@@ -72,6 +76,17 @@ private:
     std::condition_variable m_condition;
     std::atomic<bool> m_stopWorker;
 
+    bool m_commandInProgress = false; // Protected by m_queueMutex
+
+    std::thread m_homeThread;
+
+    std::atomic<bool> m_homing{false};
+    std::atomic<bool> m_cancelHome{false};
+    std::atomic<bool> m_positionUncertain{false};
+
+    std::recursive_mutex m_serialMutex;
+    std::mutex m_logMutex;
+
     // Sync for move_and_wait
     std::mutex m_syncMutex;
     std::condition_variable m_syncCondition;
@@ -81,19 +96,26 @@ private:
     std::function<void(const QString&, const QString&)> m_logCallback;
 
     // Helper to log
-    void log(const QString& message, const QString& level = "INFO") {
-        try {
-            if (m_logCallback) {
-                m_logCallback(message, level);
-            }
+void log(const QString& message, const QString& level = "INFO") {
+    try {
+        std::function<void(const QString&, const QString&)> callback;
+
+        {
+            std::lock_guard<std::mutex> lock(m_logMutex);
+            callback = m_logCallback;
         }
-        catch (const std::exception& e) {
-            qDebug() << "Log callback threw an exception:" << e.what();
-        }
-        catch (...) {
-            qDebug() << "Log callback threw an unknown exception.";
+
+        if (callback) {
+            callback(message, level);
         }
     }
+    catch (const std::exception& e) {
+        qDebug() << "Log callback threw an exception:" << e.what();
+    }
+    catch (...) {
+        qDebug() << "Log callback threw an unknown exception.";
+    }
+}
 
     // Worker thread function
     void worker();
@@ -103,20 +125,49 @@ private:
     std::string readResponse(HANDLE hSerial, int maxWaitMs = 1000);
 
     // Core movement function
-    Position _move(double x, double y, double z, double vx, double vy, double vz, char direction);
-    Position _home();
+    Position _move(
+        double x, double y, double z,
+        double vx, double vy, double vz,
+        char direction
+    );
 
+    void _home();
+
+    std::string exchangeHomeCommand(const std::string& command);
 public:
     XYZStage(const std::string& portName = "COM5");
     ~XYZStage();
 
-    void setLogCallback(const std::function<void(const QString&, const QString&)>& callback) {
+    void shutdown();
+
+    void setLogCallback(
+        const std::function<void(const QString&, const QString&)>& callback
+    ) {
+        std::lock_guard<std::mutex> lock(m_logMutex);
         m_logCallback = callback;
     }
 
     // Public move methods
-    void move(double dx, double dy, double dz, double velocity_x = 10000, double velocity_y = 10000, double velocity_z = 10000);
-    void home();
+    bool move(
+        double dx, double dy, double dz,
+        double velocity_x = 10000,
+        double velocity_y = 10000,
+        double velocity_z = 10000
+    );
+
+    bool home();
+
+    void stopHoming() {
+        m_cancelHome.store(true);
+    }
+
+    bool isHoming() const {
+        return m_homing.load();
+    }
+
+    bool positionUncertain() const {
+        return m_positionUncertain.load();
+    }
 
     // Blocking move method that waits for movement to complete
     void move_and_wait(double dx, double dy, double dz, double velocity_x = 10000, double velocity_y = 10000, double velocity_z = 10000);

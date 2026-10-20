@@ -183,8 +183,6 @@ MainWindow::MainWindow(QWidget* parent)
 
 	m_UITimer.start();
 
-
-
 }
 
 
