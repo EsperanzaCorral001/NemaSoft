@@ -26,11 +26,11 @@
 
 struct cameraOp
 {
-    QThread* thrd;
-    CameraWorker* camWorker;
+    QThread* thrd = nullptr;
+    CameraWorker* camWorker = nullptr;
     QElapsedTimer FPSTimer;
-    int frameCount;
-    QPushButton* cameraBtn;
+    int frameCount = 0;
+    QPushButton* cameraBtn = nullptr;
 
     void toggleCamera() {
         camWorker->stop();

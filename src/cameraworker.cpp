@@ -7,7 +7,11 @@
 CameraWorker::CameraWorker(int camIndex, int camType,
     int frameWidth, int frameHeight, int fps,
     QObject* parent)
-    : QObject(parent)
+    : QObject(parent),
+      m_running(false), //give variables valid values even if opening camera fails 
+      m_frameWidth(frameWidth),
+      m_frameHeight(frameHeight),
+      m_captureImg(false)
 {
     m_cameraIndex = camIndex;
     m_cameraType = camType;

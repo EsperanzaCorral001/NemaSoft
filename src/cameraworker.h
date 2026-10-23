@@ -16,6 +16,9 @@ public:
     ~CameraWorker();
     void stop();
     void start();
+    bool isOpened() const {
+        return m_cap.isOpened();
+    }   
 
     int getFrameWidth() { return m_frameWidth; };
     int getFrameHeight() { return m_frameHeight; };

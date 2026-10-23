@@ -91,7 +91,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_controlGroup->setMaximumHeight(mainHeight * 0.5);
 
     //Zoomable graphics view 
-    m_arducamView = new ZoomableGraphicsView("Ardacam Output", this);
+    m_arducamView = new ZoomableGraphicsView("Macro Camera Output", this);
     m_arducamView->setZoomLimits(0.05, 10.0); // Set zoom limits for the view
     m_arducamView->setFrameStyle(QFrame::Box);
     m_arducamView->setGeometry(mainWidth * 0.5, 0, mainWidth * 0.5, mainHeight * 0.5);
@@ -104,7 +104,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_arducamView->setScene(m_arducamScene);
     connect(m_arducamView, &ZoomableGraphicsView::imageClicked,this, &MainWindow::onArducamClicked);
 
-    m_microCam1View = new ZoomableGraphicsView("Micro Cam1 Output", this);
+    m_microCam1View = new ZoomableGraphicsView("Micro Camera Output", this);
     m_microCam1View->setZoomLimits(0.05, 10.0);
     m_microCam1View->setFrameStyle(QFrame::Box);
     m_microCam1View->setGeometry(0, mainHeight * 0.5, mainWidth * 0.5, mainHeight * 0.5);
@@ -131,11 +131,22 @@ MainWindow::MainWindow(QWidget* parent)
     m_microCam2View->setScene(m_microCam2Scene);
     connect(m_microCam2View, &ZoomableGraphicsView::imageClicked,this, &MainWindow::onMicroCam2Clicked);
 
+    // QGridLayout* mainLayout = new QGridLayout();
+    // mainLayout->addWidget(m_controlGroup, 0, 0);
+    // mainLayout->addWidget(m_arducamView, 0, 1);
+    // mainLayout->addWidget(m_microCam1View, 1, 0);
+    // mainLayout->addWidget(m_microCam2View, 1, 1);
+
     QGridLayout* mainLayout = new QGridLayout();
     mainLayout->addWidget(m_controlGroup, 0, 0);
     mainLayout->addWidget(m_arducamView, 0, 1);
-    mainLayout->addWidget(m_microCam1View, 1, 0);
-    mainLayout->addWidget(m_microCam2View, 1, 1);
+
+    // Micro camera below the macro camera.
+    mainLayout->addWidget(m_microCam1View, 1, 1);
+    m_microCam1View->setMaximumWidth(mainWidth * 0.5);
+
+    // Keep the unused view hidden for now.
+    m_microCam2View->hide();
 
     centralWidget->setLayout(mainLayout);
     
@@ -474,12 +485,12 @@ QGroupBox* MainWindow::setupControlUI() {
 
     QVBoxLayout* controlLayout = new QVBoxLayout();
 
-    m_arducamOp.cameraBtn = new QPushButton("Start Camera");
+    m_arducamOp.cameraBtn = new QPushButton("Start Macro Camera"); //changed start camera to macro
     QPushButton* captureMacroImg = new QPushButton("Capture Macro Img");
     QPushButton* predictMacroImg = new QPushButton("Calculate Path");
 	QPushButton* captureMacroData = new QPushButton("Capture Macro Data");
-    m_goToPositionBtn = new QPushButton("Go To Position 1", this);
-    m_microCam1Op.cameraBtn = new QPushButton("Start Duo Camera");
+    m_goToPositionBtn = new QPushButton("Go To Position 1", this); 
+    m_microCam1Op.cameraBtn = new QPushButton("Start Micro Camera"); //changed from start duo camera
     QPushButton* captureMicroImg = new QPushButton("Capture Micro Img");
     QPushButton* m_trivarsePath = new QPushButton("Trivarse Path");
     m_predictMicroImg = new QPushButton("Predict Micro pos");
@@ -658,7 +669,7 @@ void MainWindow::onStartArducam() {
             m_latestArducamImage = QImage();
         }
         m_arducamView->resetTransform();
-        m_arducamOp.cameraBtn->setText("Start Arducam");
+        m_arducamOp.cameraBtn->setText("Start Macro Camera");
 		m_currentMacroImg.release();
 		m_currentMacroImgdata.release();
 		m_macroImgPath.clear();
@@ -686,106 +697,89 @@ void MainWindow::onStartArducam() {
     connect(m_arducamOp.camWorker, &CameraWorker::frameReady, this, &MainWindow::updateFrame, Qt::QueuedConnection); 
     connect(m_arducamOp.thrd, &QThread::finished, m_arducamOp.camWorker, &QObject::deleteLater); 
     clearMacroAnnotations();
-    m_arducamOp.cameraBtn->setText("Stop Camera");
+    m_arducamOp.cameraBtn->setText("Stop Macro Camera");
 
     m_arducamOp.FPSTimer.start();
 
     m_arducamOp.thrd->start();
 }
 
-void MainWindow::onStartDuocam() {
-    if (m_microCam1Op.thrd || m_microCam2Op.thrd) {
-        //log("stopping duo cam", "INFO");
+void MainWindow::onStartDuocam() //now open only camera 1, check whether it opened, support stoping it. camera 2 startup code removed  
+{
+    // If the micro camera is running, stop it.
+    if (m_microCam1Op.thrd) {
+        m_microCam1Op.toggleCamera();
 
-        //// Signal cameras to stop (should set internal flags)
-        //m_microCam1Op.toggleCamera();
-        //m_microCam2Op.toggleCamera();
+        {
+            QMutexLocker locker(&m_frameMutex);
+            m_latestMicroCam1Image = QImage();
+        }
 
-        //// Wait for threads to finish with timeout to prevent indefinite freeze
-        //if (m_microCam1Op.thrd) {
-        //    if (!m_microCam1Op.thrd->wait(3000)) {  // 3 second timeout
-        //        log("Camera 1 thread did not stop gracefully, forcing termination", "WARNING");
-        //        m_microCam1Op.thrd->terminate();
-        //        m_microCam1Op.thrd->wait();
-        //    }
-        //    m_microCam1Op.thrd = nullptr;  // Clear thread pointer
-        //}
+        m_microCam1View->resetTransform();
+        m_microCam1PixmapItem->setPixmap(QPixmap());
 
-        //if (m_microCam2Op.thrd) {
-        //    if (!m_microCam2Op.thrd->wait(3000)) {
-        //        log("Camera 2 thread did not stop gracefully, forcing termination", "WARNING");
-        //        m_microCam2Op.thrd->terminate();
-        //        m_microCam2Op.thrd->wait();
-        //    }
-        //    m_microCam2Op.thrd = nullptr;  // Clear thread pointer
-        //}
+        m_currentMicroImg1.release();
+        m_microAnnotations1.clear();
 
-        //// Clean up camera 1
-        //{
-        //    QMutexLocker locker(&m_frameMutex);
-        //    m_latestMicroCam1Image = QImage();
-        //}
-        //m_microCam1View->resetTransform();
-        //m_currentMicroImg1.release();
-        //m_microAnnotations1.clear();
-        //ImageDisplay(MICROCAM1);
+        m_microCam1Op.cameraBtn->setText("Start Micro Camera");
+        m_microCam1FPS->setText("Micro Camera FPS: 0");
 
-        //// Clean up camera 2
-        //{
-        //    QMutexLocker locker(&m_frameMutex);
-        //    m_latestMicroCam2Image = QImage();
-        //}
-        //m_microCam2View->resetTransform();
-        //m_currentMicroImg2.release();
-        //m_microAnnotations2.clear();
-        //ImageDisplay(MICROCAM2);
-
-        //// Update button text
-        //m_microCam1Op.cameraBtn->setText("Start Duocam");
-
-        //log("duo cam stopped", "INFO");
+        log("Micro camera stopped.", "INFO");
         return;
     }
 
+    // Open only one micro camera.
+    // First argument: physical camera index.
+    // Second argument: which display receives its frames.
+    CameraWorker* worker =
+        new CameraWorker(1, MICROCAM1, 2720, 1536, 15);
+
+    if (!worker->isOpened()) {
+        delete worker;
+
+        m_microCam1Op.cameraBtn->setText("Start Micro Camera");
+        log("Could not open micro camera at index 1. "
+            "Check its connection and camera index.", "WARNING");
+        return;
+    }
+
+    m_microCam1Op.camWorker = worker;
     m_microCam1Op.thrd = new QThread(this);
-    m_microCam1Op.camWorker = new CameraWorker(1, 1, 2720, 1536, 15);
-    m_microCam1Op.camWorker->moveToThread(m_microCam1Op.thrd);
+    worker->moveToThread(m_microCam1Op.thrd);
 
-    m_microCam1View->scale((float)m_microCam1View->width() / m_microCam1Op.camWorker->getFrameWidth(),
-        (float)m_microCam1View->height() / m_microCam1Op.camWorker->getFrameHeight());
+    m_microCam1View->resetTransform();
 
-    connect(m_microCam1Op.thrd, &QThread::started, m_microCam1Op.camWorker, &CameraWorker::process);
+    m_microCam1View->scale(
+        static_cast<double>(m_microCam1View->width()) /
+            worker->getFrameWidth(),
+        static_cast<double>(m_microCam1View->height()) /
+            worker->getFrameHeight()
+    );
 
-    // CHANGE THIS LINE - use the new slot instead of updateFrame directly
-    connect(m_microCam1Op.camWorker, &CameraWorker::frameReady,
-        this, &MainWindow::onMicroCam1FrameReady, Qt::QueuedConnection);
+    connect(
+        m_microCam1Op.thrd, &QThread::started,
+        worker, &CameraWorker::process
+    );
 
-    connect(m_microCam1Op.thrd, &QThread::finished, m_microCam1Op.camWorker, &QObject::deleteLater);
+    connect(
+        worker, &CameraWorker::frameReady,
+        this, &MainWindow::onMicroCam1FrameReady,
+        Qt::QueuedConnection
+    );
 
-    m_microCam1Op.thrd->start();
+    connect(
+        m_microCam1Op.thrd, &QThread::finished,
+        worker, &QObject::deleteLater
+    );
+
+    m_microAnnotations1.clear();
+    m_microCam1Op.frameCount = 0;
     m_microCam1Op.FPSTimer.start();
 
-    // MicroCam2
-    m_microCam2Op.thrd = new QThread(this);
-    m_microCam2Op.camWorker = new CameraWorker(2, 2, 2720, 1536, 15);
-    m_microCam2Op.camWorker->moveToThread(m_microCam2Op.thrd);
+    m_microCam1Op.cameraBtn->setText("Stop Micro Camera");
+    m_microCam1Op.thrd->start();
 
-    m_microCam2View->scale((float)m_microCam2View->width() / m_microCam2Op.camWorker->getFrameWidth(),
-        (float)m_microCam2View->height() / m_microCam2Op.camWorker->getFrameHeight());
-
-    connect(m_microCam2Op.thrd, &QThread::started, m_microCam2Op.camWorker, &CameraWorker::process);
-
-    // CHANGE THIS LINE too
-    connect(m_microCam2Op.camWorker, &CameraWorker::frameReady,
-        this, &MainWindow::onMicroCam2FrameReady, Qt::QueuedConnection);
-
-    connect(m_microCam2Op.thrd, &QThread::finished, m_microCam2Op.camWorker, &QObject::deleteLater);
-
-    m_microCam2Op.thrd->start();
-    m_microCam2Op.FPSTimer.start();
-
-    m_microCam1Op.cameraBtn->setText("Stop Duo Camera");
-    clearMicroAnnotations();
+    log("Micro camera started.", "INFO");
 }
 
 void MainWindow::onCaptureMacroImg() {
@@ -819,7 +813,7 @@ void MainWindow::onCaptureMacroImg() {
 
     // **FIX: Update button text to show camera is stopped**
     if (m_arducamOp.cameraBtn) {
-        m_arducamOp.cameraBtn->setText("Restart Arducam");
+        m_arducamOp.cameraBtn->setText("Restart Macro Camera");
     }
 
     log("Macro image captured successfully. Camera feed stopped.", "INFO");
@@ -868,7 +862,7 @@ void MainWindow::inferenceResult(const cv::Mat& frame, const std::vector<cv::Rec
     m_arducamOp.toggleCamera();
 	ImageDisplay(ARDUCAM);
 
-    m_arducamOp.cameraBtn->setText("Restart Arducam");
+    m_arducamOp.cameraBtn->setText("Restart Macro Camera");
 
     if (m_macroImgInference.thrd) {
         m_macroImgInference.thrd->quit();
@@ -988,7 +982,11 @@ void MainWindow::onPredictMacroImg() {
 
 //----------------------------------------------DATA CAPTURE------------------------------------------------------------
 // Add this new slot to MainWindow
-void MainWindow::onMicroCam1FrameReady(const QImage& img, int camType) {
+
+    if (!m_microCam1Op.camWorker) {
+        return;
+    }
+
     if (camType != MICROCAM1) {
         updateFrame(img, camType);
         return;
