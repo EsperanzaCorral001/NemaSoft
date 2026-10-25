@@ -272,7 +272,7 @@ private:
     
     QComboBox* m_macroComboBox;
     QComboBox* m_microComboBox;
-    QComboBox* m_trivarsePath;
+    QPushButton* m_trivarsePath = nullptr;
     QPushButton* m_predictMicroImg = nullptr;
 
     QThread* m_traverserThread = nullptr;

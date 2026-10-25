@@ -492,7 +492,7 @@ QGroupBox* MainWindow::setupControlUI() {
     m_goToPositionBtn = new QPushButton("Go To Position 1", this); 
     m_microCam1Op.cameraBtn = new QPushButton("Start Micro Camera"); //changed from start duo camera
     QPushButton* captureMicroImg = new QPushButton("Capture Micro Img");
-    QPushButton* m_trivarsePath = new QPushButton("Trivarse Path");
+    m_trivarsePath = new QPushButton("Trivarse Path");
     m_predictMicroImg = new QPushButton("Predict Micro pos");
 	QPushButton* captureMicroData = new QPushButton("Capture Micro Data");
 
@@ -982,7 +982,7 @@ void MainWindow::onPredictMacroImg() {
 
 //----------------------------------------------DATA CAPTURE------------------------------------------------------------
 // Add this new slot to MainWindow
-
+void MainWindow::onMicroCam1FrameReady(const QImage& img, int camType){
     if (!m_microCam1Op.camWorker) {
         return;
     }
@@ -991,6 +991,8 @@ void MainWindow::onPredictMacroImg() {
         updateFrame(img, camType);
         return;
     }
+
+    // Keep the remaining existing function code here.
 
     cv::Mat frame = m_microCam1Op.camWorker->getCurrentFrame();
 
