@@ -1223,98 +1223,59 @@ void MainWindow::onArducamClicked(const QPointF& scenePos, const QPointF& imageP
 
 
 /////////////////////////////////////////////////////////////////////////////////////////
-void MainWindow::onMicroCam1Clicked(const QPointF& scenePos, const QPointF& imagePos) {
-    log(QString("MicroCam1 clicked - Scene: (%1, %2), Image: (%3, %4)")
-        .arg(scenePos.x()).arg(scenePos.y())
+void MainWindow::onMicroCam1Clicked(
+    const QPointF& scenePos,
+    const QPointF& imagePos)
+{
+    log(QString("Micro camera clicked - Image: (%1, %2)")
         .arg(imagePos.x()).arg(imagePos.y()), "INFO");
 
-    cv::Mat currentFrame1 = m_microCam1Op.camWorker->getCurrentFrame();
-
-    if (currentFrame1.empty()) {
-        log("No frame available from MicroCam1", "WARNING");
+    if (!m_microCam1Op.camWorker) {
+        log("Start the micro camera before adding annotations.",
+            "WARNING");
         return;
     }
 
-    int imageWidth = currentFrame1.cols;
-    int imageHeight = currentFrame1.rows;
+    cv::Mat frame = m_microCam1Op.camWorker->getCurrentFrame();
 
-    // Check if click is inside any existing bounding box (for deletion)
+    if (frame.empty()) {
+        log("No micro-camera frame available.", "WARNING");
+        return;
+    }
+
+    const int imageWidth = frame.cols;
+    const int imageHeight = frame.rows;
+
+    if (imagePos.x() < 0 || imagePos.y() < 0 ||
+        imagePos.x() >= imageWidth ||
+        imagePos.y() >= imageHeight) {
+        return;
+    }
+
+    // Clicking an existing annotation removes it.
     for (int i = m_microAnnotations1.size() - 1; i >= 0; --i) {
-        if (isClickInsideBox(imagePos, m_microAnnotations1[i], imageWidth, imageHeight)) {
-            log(QString("Deleting annotation at index:%1").arg(i), "INFO");
-
-            // Also remove corresponding annotation from Cam2
-            if (i < m_microAnnotations2.size()) {
-                m_microAnnotations2.removeAt(i);
-                log("Removed corresponding annotation from MicroCam2", "INFO");
-            }
-
+        if (isClickInsideBox(
+                imagePos,
+                m_microAnnotations1[i],
+                imageWidth,
+                imageHeight)) {
             m_microAnnotations1.removeAt(i);
+            ImageDisplay(MICROCAM1);
             return;
         }
     }
 
-    // Add new annotation to Cam1
-    int classId = getSelectedMicroId();
-    double normalizedX = imagePos.x() / imageWidth;
-    double normalizedY = imagePos.y() / imageHeight;
-    double defaultWidth = 0.05;
-    double defaultHeight = 0.05;
+    YoloAnnotation annotation;
+    annotation.classId = getSelectedMicroId();
+    annotation.center = QPointF(
+        imagePos.x() / imageWidth,
+        imagePos.y() / imageHeight
+    );
+    annotation.width = 0.05;
+    annotation.height = 0.05;
 
-    YoloAnnotation annotation1;
-    annotation1.classId = classId;
-    annotation1.center = QPointF(normalizedX, normalizedY);
-    annotation1.width = defaultWidth;
-    annotation1.height = defaultHeight;
-
-    m_microAnnotations1.append(annotation1);
-
-    log(QString("Manual annotation added to MicroCam1 - Class: %1")
-        .arg(classId), "INFO");
-
-    // Now find corresponding point in MicroCam2 using SIFT
-    cv::Mat currentFrame2 = m_microCam2Op.camWorker->getCurrentFrame();
-
-    if (currentFrame2.empty()) {
-        log("Cannot find corresponding point - MicroCam2 frame not available", "WARNING");
-        return;
-    }
-
-    //log("Searching for corresponding point in MicroCam2...", "INFO");
-
-    //QPointF correspondingPoint;
-    //bool found = m_pointMatcher->findCorrespondingPoint(
-    //    currentFrame1,
-    //    currentFrame2,
-    //    imagePos,
-    //    correspondingPoint
-    //);
-
-    //if (found) {
-    //    // Add annotation to Cam2
-    //    int imageWidth2 = currentFrame2.cols;
-    //    int imageHeight2 = currentFrame2.rows;
-
-    //    double normalizedX2 = correspondingPoint.x() / imageWidth2;
-    //    double normalizedY2 = correspondingPoint.y() / imageHeight2;
-
-    //    YoloAnnotation annotation2;
-    //    annotation2.classId = classId;
-    //    annotation2.center = QPointF(normalizedX2, normalizedY2);
-    //    annotation2.width = defaultWidth;
-    //    annotation2.height = defaultHeight;
-
-    //    m_microAnnotations2.append(annotation2);
-
-    //    float confidence = m_pointMatcher->getLastMatchConfidence();
-    //    log(QString("Corresponding point added to MicroCam2 at (%1, %2) with confidence %3")
-    //        .arg(correspondingPoint.x())
-    //        .arg(correspondingPoint.y())
-    //        .arg(confidence), "INFO");
-    //}
-    //else {
-    //    log("Could not find corresponding point in MicroCam2. Annotation added only to MicroCam1.", "WARNING");
-    //}
+    m_microAnnotations1.append(annotation);
+    ImageDisplay(MICROCAM1);
 }
 
 
@@ -1508,158 +1469,139 @@ void MainWindow::onCaptureMacroData() {
         log("Captured macro image is empty. Not saving.", "WARNING");
     }
 }
-void MainWindow::onCaptureMicroData() {
-    if (!m_microCam1Op.thrd || !m_microCam2Op.thrd) {
-        log("Duo cams are not running. Cannot capture data.", "WARNING");
+void MainWindow::onCaptureMicroData()
+{
+    if (!m_microCam1Op.camWorker) {
+        log("Start the micro camera before capturing data.",
+            "WARNING");
         return;
     }
-    m_microCam1Op.camWorker->setCaptureImg(true);
-    QThread::msleep(50);
-    m_currentMicroImg1 = m_microCam1Op.camWorker->getCaturedFrame().clone();
-	m_microCam2Op.camWorker->setCaptureImg(true);
-	QThread::msleep(50);
-    m_currentMicroImg2 = m_microCam2Op.camWorker->getCaturedFrame().clone();
-    QString timestamp;
-    if (!m_currentMicroImg1.empty() && !m_currentMicroImg2.empty()) {
-        // Save Macro image
-        QString folderPath1 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img_data/cam1_images");
-		QDir dir1;
-        QString folderPath2 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img_data/cam2_images");
-        QDir dir2;
-        if (!dir1.exists(folderPath1)) {
-			dir1.mkpath(folderPath1);//check and create the folder if it does not exist
-        }
-        if (!dir2.exists(folderPath2)) {
-            dir2.mkpath(folderPath2);
-		}
 
+    // Save the latest available frame without a fixed sleep.
+    m_currentMicroImg1 =
+        m_microCam1Op.camWorker->getCurrentFrame().clone();
 
-        timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz");
-        QString filePath1 = folderPath1 + "/" +"cam1_" + timestamp + ".png";
-        cv::imwrite(filePath1.toStdString(), m_currentMicroImg1);
-		QString filePath2 = folderPath2 + "/" + "cam2_" + timestamp + ".png";
-		cv::imwrite(filePath2.toStdString(), m_currentMicroImg2);
+    if (m_currentMicroImg1.empty()) {
+        log("No micro-camera frame available.", "WARNING");
+        return;
+    }
 
-        log("Micro image saved to: " + filePath1, "INFO");
+    const QDir appDir(QCoreApplication::applicationDirPath());
 
-        // Save current stage position
-        QString labelsFolder1 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img_data/cam1_labels");
-        QDir ldir1;
-        if (!ldir1.exists(labelsFolder1)) {
-            ldir1.mkpath(labelsFolder1);
-        }
-        QString positionFilePath1 = QDir(labelsFolder1).filePath("cam1_" + timestamp + ".txt");
-        // labels for cam 2
-        QString labelsFolder2 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img_data/cam2_labels");
-        QDir ldir2;
-        if (!ldir2.exists(labelsFolder2)) {
-            ldir2.mkpath(labelsFolder2);
-        }
-        QString positionFilePath2 = QDir(labelsFolder2).filePath("cam2_" + timestamp + ".txt");
+    const QString imagesFolder =
+        appDir.filePath("micro_img_data/cam1_images");
+    const QString labelsFolder =
+        appDir.filePath("micro_img_data/cam1_labels");
 
-        // Now write to the file
-        QFile l_file1(positionFilePath1);
-        if (l_file1.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&l_file1);
-            // out << positionData;
-            for (const YoloAnnotation& ann : m_microAnnotations1) {
-                out << ann.classId << " "
-                    << ann.center.x() << " "
-                    << ann.center.y() << " "
-                    << ann.width << " "
-                    << ann.height << "\n";
-            }
-            l_file1.close();
-            log("Position data saved to: " + positionFilePath1, "INFO");
-        }
-        else {
-            log("Failed to create position file: " + positionFilePath1, "WARNING");
-        }
-		//repeat for cam 2
-        QFile l_file2(positionFilePath2);
-        if (l_file2.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&l_file2);
-            for (const YoloAnnotation& ann : m_microAnnotations2) {
-                out << ann.classId << " "
-                    << ann.center.x() << " "
-                    << ann.center.y() << " "
-                    << ann.width << " "
-                    << ann.height << "\n";
-            }
-            // out << positionData;
-            l_file2.close();
-            log("Position data saved to: " + positionFilePath2, "INFO");
-        }
-        else {
-            log("Failed to create position file: " + positionFilePath2, "WARNING");;
+    QDir dir;
+    if (!dir.mkpath(imagesFolder) || !dir.mkpath(labelsFolder)) {
+        log("Could not create micro-data folders.", "WARNING");
+        return;
+    }
+
+    const QString timestamp =
+        QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz");
+    const QString baseName = "cam1_" + timestamp;
+
+    const QString imagePath =
+        QDir(imagesFolder).filePath(baseName + ".png");
+    const QString labelPath =
+        QDir(labelsFolder).filePath(baseName + ".txt");
+
+    try {
+        if (!cv::imwrite(
+                imagePath.toStdString(), m_currentMicroImg1)) {
+            log("Could not save micro image.", "WARNING");
+            return;
         }
     }
-    else {
-        log("Captured macro image is empty. Not saving.", "WARNING");
+    catch (const cv::Exception& e) {
+        log(QString("Image save failed: %1").arg(e.what()),
+            "WARNING");
+        return;
     }
+
+    QFile labelFile(labelPath);
+    if (!labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        log("Image saved, but could not open annotation file: " +
+            labelPath, "WARNING");
+        return;
+    }
+
+    QTextStream out(&labelFile);
+
+    for (const YoloAnnotation& ann : m_microAnnotations1) {
+        out << ann.classId << " "
+            << ann.center.x() << " "
+            << ann.center.y() << " "
+            << ann.width << " "
+            << ann.height << "\n";
+    }
+
+    out.flush();
+
+    if (out.status() != QTextStream::Ok) {
+        log("Image saved, but writing annotations failed.",
+            "WARNING");
+        return;
+    }
+
+    labelFile.close();
+
+    log("Micro image saved to: " + imagePath, "INFO");
+    log("Annotations saved to: " + labelPath, "INFO");
 }
-
 //----------------------------------------------------------------------------------------------------------------
 
-void MainWindow::onCaptureMicroImg() {
-    // ====== MicroCam1 ======
-    if (!m_microCam1Op.thrd) {
-        log("First microCam is not running. Cannot capture image.", "WARNING");
+void MainWindow::onCaptureMicroImg()
+{
+    if (!m_microCam1Op.camWorker) {
+        log("Start the micro camera before capturing an image.",
+            "WARNING");
         return;
     }
-    m_microCam1Op.camWorker->setCaptureImg(true);
-    QThread::msleep(50);
-    m_currentMicroImg1 = m_microCam1Op.camWorker->getCaturedFrame().clone();
-    // Save MicroCam1 image
-    if (!m_currentMicroImg1.empty()) {
-        QString folderPath1 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img1");
-        QDir dir1;
-        if (!dir1.exists(folderPath1)) {
-            dir1.mkpath(folderPath1);
-        }
-        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz");
-        QString filePath1 = folderPath1 + "/" + timestamp + "_cam1.png";
-        cv::imwrite(filePath1.toStdString(), m_currentMicroImg1);
-        log("MicroCam1 image saved to: " + filePath1, "INFO");
-		
-    }
-    else {
-        log("MicroCam1 captured image is empty. Not saving.", "WARNING");
-    }
 
-    // ====== MicroCam2 ======
-    if (!m_microCam2Op.thrd) {
-        log("Second microCam is not running. Cannot capture image.", "WARNING");
+    m_currentMicroImg1 =
+        m_microCam1Op.camWorker->getCurrentFrame().clone();
+
+    if (m_currentMicroImg1.empty()) {
+        log("No micro-camera frame available.", "WARNING");
         return;
     }
-    m_microCam2Op.camWorker->setCaptureImg(true);
-    QThread::msleep(50);
-    m_currentMicroImg2 = m_microCam2Op.camWorker->getCaturedFrame().clone();
-    // Save MicroCam2 image
-    if (!m_currentMicroImg2.empty()) {
-        QString folderPath2 = QDir(QCoreApplication::applicationDirPath()).filePath("micro_img2");
-        QDir dir2;
-        if (!dir2.exists(folderPath2)) {
-            dir2.mkpath(folderPath2);
+
+    const QString folderPath =
+        QDir(QCoreApplication::applicationDirPath())
+            .filePath("micro_img1");
+
+    QDir dir;
+    if (!dir.mkpath(folderPath)) {
+        log("Could not create micro-image folder.", "WARNING");
+        return;
+    }
+
+    const QString timestamp =
+        QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz");
+
+    const QString filePath =
+        QDir(folderPath).filePath(timestamp + "_cam1.png");
+
+    try {
+        if (!cv::imwrite(
+                filePath.toStdString(), m_currentMicroImg1)) {
+            log("Could not save micro image.", "WARNING");
+            return;
         }
-        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss_zzz");
-        QString filePath2 = folderPath2 + "/" + timestamp + "_cam2.png";
-        cv::imwrite(filePath2.toStdString(), m_currentMicroImg2);
-        log("MicroCam2 image saved to: " + filePath2, "INFO");
     }
-    else {
-        log("MicroCam2 captured image is empty. Not saving.", "WARNING");
+    catch (const cv::Exception& e) {
+        log(QString("Image save failed: %1").arg(e.what()),
+            "WARNING");
+        return;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(2000))); // wait for 300 ms to ensure images are saved properly before restarting the cams
-    onStartDuocam(); // reset the micro cams after capturing the images
-    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(3000))); // wait for 300 ms to ensure images are saved properly before restarting the cams
-	m_microCam1Op.cameraBtn->clicked(); // to update the button text to "Start Duo Cam"
-
-
-
-
+    log("Micro image saved to: " + filePath, "INFO");
 }
+
+
 void MainWindow::onPredictMicroImg() {
 	log("Predict Micro Image button clicked.", "INFO");
 }
