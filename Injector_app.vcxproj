@@ -65,7 +65,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>G:\My Drive\SV6_rahul\10_26_2025\deps\Eigen\eigen-5.0.0;$(SolutionDir)deps\opencv\build\include;$(SolutionDir)deps\onnxruntime-win-x64-1.22.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>G:\My Drive\SV6_rahul\10_26_2025\deps\Eigen\eigen-5.0.0;$(SolutionDir)deps\opencv\build\include;$(SolutionDir)deps\onnxruntime-win-x64-1.22.1\include;$(ProjectDir)deps\Eigen\eigen-5.0.0;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(SolutionDir)deps\opencv\build\x64\vc16\lib;$(SolutionDir)deps\opencv\build\x64\vc16\bin;$(SolutionDir)deps\onnxruntime-win-x64-1.22.1\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
