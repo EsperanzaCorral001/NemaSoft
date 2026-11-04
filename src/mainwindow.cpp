@@ -872,45 +872,66 @@ void MainWindow::inferenceResult(const cv::Mat& frame, const std::vector<cv::Rec
 
 
 
-void MainWindow::setupTransformationMatrix() {
-    // Example calibration points - replace with your actual calibration data
-    std::vector<cv::Point2f> imagePoints = {
-        cv::Point2f(1981 , 795),   // Replace with actual image coordinates // i
-        cv::Point2f(2088, 1001),   // from your calibration process// center
-        cv::Point2f(1804, 760)//0.1
-    };
+void MainWindow::setupTransformationMatrix()
+{
+    // Nine-point calibration.
+    // Macro capture position:
+    // X = 109000, Y = 120000, Z = 18831.
+    //
+    // Maps macro image pixels to NemaSoft stage X/Y coordinates.
+    // Z focus is handled separately.
+    m_transformMatrix = (cv::Mat_<double>(2, 3) <<
+        0.42547457089, -15.051557123, 21738.400281,
+        14.850654682, 0.56071585623, 134151.23591
+        );
 
-    std::vector<cv::Point2f> realPoints = {
-        cv::Point2f(60772, 27545), // Replace with actual real world coordinates
-        cv::Point2f(57409, 34181), // corresponding to the image points above
-        cv::Point2f(58272, 22318)
-    };
+    std::ostringstream oss;
+    oss << m_transformMatrix;
 
-    m_transformMatrix = calculateTransformationMatrix(imagePoints, realPoints);
+    log(
+        QString("Affine Matrix is: %1")
+        .arg(QString::fromStdString(oss.str())),
+        "INFO"
+    );
 
-    QString matrixStr;
-    if (!m_transformMatrix.empty()) {
-        // Convert cv::Mat to string for logging
-        std::ostringstream oss;
-        oss << m_transformMatrix;
-        matrixStr = QString::fromStdString(oss.str());
-    }
-    else {
-        matrixStr = "Matrix is empty";
-    }
-    log(QString("Affine Matrix is: %1").arg(matrixStr), "INFO");
-
-    if (!m_transformMatrix.empty()) {
-        log("Transformation matrix initialized successfully","INFO");
-    }
-    else {
-        log("Failed to initialize transformation matrix", "INFO");
-    }
+    log("Nine-point XY transformation initialized.", "INFO");
 }
 
 
 
 void MainWindow::onPredictMacroImg() {
+
+    // Manual-dot calibration: build the path without ONNX.
+    if (m_currentMacroImgdata.empty()) {
+        log("Capture a macro image first.", "WARNING");
+        return;
+    }
+
+    if (m_macroAnnotations.isEmpty()) {
+        log("Click a dot on the captured image first.", "WARNING");
+        return;
+    }
+
+    m_macroImgPath.clear();
+
+    const int width = m_currentMacroImgdata.cols;
+    const int height = m_currentMacroImgdata.rows;
+
+    for (const YoloAnnotation& ann : m_macroAnnotations) {
+        const int x = static_cast<int>(ann.center.x() * width);
+        const int y = static_cast<int>(ann.center.y() * height);
+
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+            // A one-pixel box places the path target at the click.
+            m_macroImgPath.emplace_back(x, y, 1, 1);
+        }
+    }
+
+    log(QString("Manual path prepared: %1 targets.")
+        .arg(static_cast<int>(m_macroImgPath.size())), "INFO");
+
+    return; // Skip the existing ONNX inference code below.
+
     // Check if manual annotations already exist
     if (!m_macroAnnotations.isEmpty()) {
         log("Manual annotations detected. Using existing annotations for path traversal.", "INFO");
