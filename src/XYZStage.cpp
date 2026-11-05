@@ -198,7 +198,7 @@ void XYZStage::move_and_wait(double dx, double dy, double dz, double velocity_x,
 
     // Wait for completion with timeout to avoid indefinite hangs
     log("move_and_wait: Waiting for completion...", "INFO");
-    bool completed = m_syncCondition.wait_for(lock, std::chrono::seconds(20), [this] {
+    bool completed = m_syncCondition.wait_for(lock, std::chrono::seconds(65), [this] {
         return !m_isWaitingForMoveCompletion.load();
     });
 
@@ -392,40 +392,103 @@ XYZStage::Position XYZStage::_move(double x, double y, double z, double vx, doub
         cmd = buffer;
     }
 
-    // Send command
-    DWORD bytesWritten;
-    if (!WriteFile(m_serialHandle, cmd.c_str(), static_cast<DWORD>(cmd.length()), &bytesWritten, NULL)) {
-        log("Failed to write to serial port!", "CRITICAL");
-        return position;
+    // Send a command and validate its controller reply.
+    // _move() already holds m_serialMutex.
+    const auto checkedExchange = [this](const std::string& command) {
+        const auto packet =
+            homing::parsePacket(exchangeHomeCommand(command));
+
+        if (!packet.valid) {
+            throw std::runtime_error(
+                "Missing or malformed controller response"
+            );
+        }
+
+        if (packet.error != 0) {
+            throw std::runtime_error(
+                "Controller error code " +
+                std::to_string(packet.error)
+            );
+        }
+
+        return packet;
+    };
+
+    try {
+        // Clear old replies before starting this transaction.
+        if (!PurgeComm(m_serialHandle, PURGE_RXCLEAR)) {
+            throw std::runtime_error("Could not clear serial input");
+        }
+
+        if (!checkedExchange("/1Q\r").ready) {
+            throw std::runtime_error(
+                "Controller already busy before queued move"
+            );
+        }
+
+        // Read the move acknowledgement before polling.
+        checkedExchange(cmd);
+
+        log(QString("Command sent: %1")
+            .arg(QString::fromStdString(cmd).trimmed()), "INFO");
+
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(60);
+
+        while (true) {
+            if (m_stopWorker.load()) {
+                throw std::runtime_error("Movement interrupted");
+            }
+
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error("Movement timed out");
+            }
+
+            if (checkedExchange("/1Q\r").ready) {
+                break;
+            }
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(50)
+            );
+        }
+
+        // Read position only after the controller reports ready.
+        const auto packet = checkedExchange("/1?aA\r");
+        std::array<long long, 3> rawPosition{};
+
+        if (!homing::parsePositions(packet, rawPosition)) {
+            throw std::runtime_error("Invalid XYZ position response");
+        }
+
+        position.x = static_cast<double>(rawPosition[0]) / scale.x;
+        position.y = static_cast<double>(rawPosition[1]) / scale.y;
+        position.z = static_cast<double>(rawPosition[2]) / scale.z;
+
+        globle_vars.current_x.store(position.x);
+        globle_vars.current_y.store(position.y);
+        globle_vars.current_z.store(position.z);
+
+        log("Controller ready; position updated.", "INFO");
     }
+    catch (const std::exception& e) {
+        // Block further moves and discard queued jogs.
+        m_positionUncertain.store(true);
 
-    log(QString("Command sent: %1").arg(QString::fromStdString(cmd).trimmed()), "INFO");
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            while (!m_commandQueue.empty()) {
+                m_commandQueue.pop();
+            }
+        }
 
-    // Calculate wait time
-    double sleep_time = 3.0;
+        // Attempt a stop. This is not a hardware emergency stop.
+        exchangeHomeCommand("/1T\r");
 
-    if (vx_units > 1) {
-        double time = std::abs(static_cast<double>(x_units) / vx_units);
-        if (time > sleep_time) sleep_time = time;
+        log(QString("Movement stopped: %1").arg(e.what()),
+            "CRITICAL");
     }
-    if (vy_units > 1) {
-        double time = std::abs(static_cast<double>(y_units) / vy_units);
-        if (time > sleep_time) sleep_time = time;
-    }
-    if (vz_units > 1) {
-        double time = std::abs(static_cast<double>(z_units) / vz_units);
-        if (time > sleep_time) sleep_time = time;
-    }
-
-    sleep_time += 0.5; // Buffer time
-
-    log(QString("Waiting %1 seconds for movement...").arg(sleep_time, 0, 'f', 2), "INFO");
-
-    // Wait for movement
-    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sleep_time * 1000)));
-
-    // Query new position
-    getPosition();
 
     return position;
 }
