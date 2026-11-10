@@ -44,8 +44,8 @@ struct cameraOp
 
 struct inferenceOp
 {
-    QThread* thrd;
-    InferenceWorker* infWorker;
+    QThread* thrd = nullptr;
+    InferenceWorker* infWorker = nullptr;
 
     void free() {
         thrd->quit();

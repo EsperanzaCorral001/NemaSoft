@@ -872,42 +872,16 @@ void MainWindow::inferenceResult(const cv::Mat& frame, const std::vector<cv::Rec
 
 
 
-void MainWindow::setupTransformationMatrix() {
-    // Example calibration points - replace with your actual calibration data
-    std::vector<cv::Point2f> imagePoints = {
-        cv::Point2f(1981 , 795),   // Replace with actual image coordinates // i
-        cv::Point2f(2088, 1001),   // from your calibration process// center
-        cv::Point2f(1804, 760)//0.1
-    };
+void MainWindow::setupTransformationMatrix()
+{
 
-    std::vector<cv::Point2f> realPoints = {
-        cv::Point2f(60772, 27545), // Replace with actual real world coordinates
-        cv::Point2f(57409, 34181), // corresponding to the image points above
-        cv::Point2f(58272, 22318)
-    };
+    m_transformMatrix = (cv::Mat_<double>(2, 3) <<
+        0.332809795219, -14.6407314087, 21510.7830175,
+        15.8444688290,  0.700395734690, 131585.123327
+    );
 
-    m_transformMatrix = calculateTransformationMatrix(imagePoints, realPoints);
-
-    QString matrixStr;
-    if (!m_transformMatrix.empty()) {
-        // Convert cv::Mat to string for logging
-        std::ostringstream oss;
-        oss << m_transformMatrix;
-        matrixStr = QString::fromStdString(oss.str());
-    }
-    else {
-        matrixStr = "Matrix is empty";
-    }
-    log(QString("Affine Matrix is: %1").arg(matrixStr), "INFO");
-
-    if (!m_transformMatrix.empty()) {
-        log("Transformation matrix initialized successfully","INFO");
-    }
-    else {
-        log("Failed to initialize transformation matrix", "INFO");
-    }
+    log("Macro-to-stage calibration loaded.", "INFO");
 }
-
 
 
 void MainWindow::onPredictMacroImg() {
@@ -1770,6 +1744,11 @@ void MainWindow::onFocusCam2() {
 
 
 void MainWindow::onTriversePath() {
+    if (m_traverserThread) {
+        log("Traversal is already running.", "WARNING");
+        return;
+    }
+
     if (m_xyzStage.isHoming() || m_xyzStage.positionUncertain()) {
         log("Traversal requires a confirmed, idle stage", "WARNING");
         return;
@@ -1819,7 +1798,7 @@ void MainWindow::onAbortPathClicked() {
     log("Abort button clicked.", "INFO");
     if (m_traverser) {
         // Use invokeMethod for thread safety
-        QMetaObject::invokeMethod(m_traverser, "abortTraversal", Qt::QueuedConnection);
+        m_traverser->abortTraversal();
     }
     // The onTraversalFinished slot will handle UI cleanup
     m_predictMicroImg->setEnabled(true);
