@@ -874,64 +874,19 @@ void MainWindow::inferenceResult(const cv::Mat& frame, const std::vector<cv::Rec
 
 void MainWindow::setupTransformationMatrix()
 {
-    // Nine-point calibration.
-    // Macro capture position:
-    // X = 109000, Y = 120000, Z = 18831.
-    //
-    // Maps macro image pixels to NemaSoft stage X/Y coordinates.
-    // Z focus is handled separately.
+
     m_transformMatrix = (cv::Mat_<double>(2, 3) <<
-        0.42547457089, -15.051557123, 21738.400281,
-        14.850654682, 0.56071585623, 134151.23591
-        );
-
-    std::ostringstream oss;
-    oss << m_transformMatrix;
-
-    log(
-        QString("Affine Matrix is: %1")
-        .arg(QString::fromStdString(oss.str())),
-        "INFO"
+        0.332809795219, -14.6407314087, 21510.7830175,
+        15.8444688290,  0.700395734690, 131585.123327
     );
 
-    log("Nine-point XY transformation initialized.", "INFO");
+    log("Macro-to-stage calibration loaded.", "INFO");
 }
-
-
-
-void MainWindow::onPredictMacroImg() {
-
-    // Manual-dot calibration: build the path without ONNX.
-    if (m_currentMacroImgdata.empty()) {
-        log("Capture a macro image first.", "WARNING");
-        return;
-    }
-
-    if (m_macroAnnotations.isEmpty()) {
-        log("Click a dot on the captured image first.", "WARNING");
-        return;
-    }
-
-    m_macroImgPath.clear();
-
-    const int width = m_currentMacroImgdata.cols;
-    const int height = m_currentMacroImgdata.rows;
-
-    for (const YoloAnnotation& ann : m_macroAnnotations) {
-        const int x = static_cast<int>(ann.center.x() * width);
-        const int y = static_cast<int>(ann.center.y() * height);
-
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-            // A one-pixel box places the path target at the click.
-            m_macroImgPath.emplace_back(x, y, 1, 1);
-        }
-    }
 
     log(QString("Manual path prepared: %1 targets.")
         .arg(static_cast<int>(m_macroImgPath.size())), "INFO");
 
-    return; // Skip the existing ONNX inference code below.
-
+void MainWindow::onPredictMacroImg() {
     // Check if manual annotations already exist
     if (!m_macroAnnotations.isEmpty()) {
         log("Manual annotations detected. Using existing annotations for path traversal.", "INFO");
@@ -1791,6 +1746,11 @@ void MainWindow::onFocusCam2() {
 
 
 void MainWindow::onTriversePath() {
+    if (m_traverserThread) {
+        log("Traversal is already running.", "WARNING");
+        return;
+    }
+
     if (m_xyzStage.isHoming() || m_xyzStage.positionUncertain()) {
         log("Traversal requires a confirmed, idle stage", "WARNING");
         return;
@@ -1840,7 +1800,7 @@ void MainWindow::onAbortPathClicked() {
     log("Abort button clicked.", "INFO");
     if (m_traverser) {
         // Use invokeMethod for thread safety
-        QMetaObject::invokeMethod(m_traverser, "abortTraversal", Qt::QueuedConnection);
+        m_traverser->abortTraversal();
     }
     // The onTraversalFinished slot will handle UI cleanup
     m_predictMicroImg->setEnabled(true);

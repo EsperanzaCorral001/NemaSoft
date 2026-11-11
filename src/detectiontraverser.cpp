@@ -68,27 +68,29 @@ void DetectionTraverser::process()
 
             emit updateProgress(i + 1, realCoordinates.size());
             const cv::Point2f& targetPoint = realCoordinates[i];
-            if (targetPoint.x < MIN_X || targetPoint.x > MAX_X ||
-                targetPoint.y < MIN_Y || targetPoint.y > MAX_Y) {
+            if (!std::isfinite(targetPoint.x) ||
+                !std::isfinite(targetPoint.y) ||
+                targetPoint.x < globle_vars.min_x ||
+                targetPoint.x > globle_vars.max_x ||
+                targetPoint.y < globle_vars.min_y ||
+                targetPoint.y > globle_vars.max_y) {
                 Logger::warning(QString("Point %1 is out of bound. Skipping!").arg(i + 1));
                 continue;  // Skip to next point
             }
-            // Read current position atomically once
-            double currentX = globle_vars.current_x.load();
-            double currentY = globle_vars.current_y.load();
-            double currentZ = globle_vars.current_z.load();
 
-            // Calculate deltas from the *current actual position*
-            double deltaX = targetPoint.x - currentX;
-            double deltaY = targetPoint.y - currentY;
-            double deltaZ = 14000 - currentZ; // Constant Z target
+            // Move to absolute XY targets. Leave Z unchanged for manual focus.
+            const double currentX = globle_vars.current_x.load();
 
-            Logger::info(QString("Point %1/%2: Moving...").arg(i + 1).arg(realCoordinates.size()));
-            // Use the new BLOCKING move function
-            m_xyzStage->move_and_wait(0, 0, -1000); // Ensure we start from current position
-            m_xyzStage->move_and_wait(deltaX, 0, 0);
-            m_xyzStage->move_and_wait(0, deltaY, 0);
-            m_xyzStage->move_and_wait(0, 0, deltaZ);
+            m_xyzStage->move_and_wait(
+                targetPoint.x - currentX, 0, 0
+            );
+
+            // Read Y immediately before issuing its movement.
+            const double currentY = globle_vars.current_y.load();
+
+            m_xyzStage->move_and_wait(
+                0, targetPoint.y - currentY, 0
+            );
 
             Logger::info(QString("Arrived at point %1 ...Waiting for user adjustment.").arg(i + 1));
             emit waitingForUserAdjustment();
