@@ -913,15 +913,21 @@ void MainWindow::onPredictMacroImg() {
                 manualBoxes.push_back(box);
             }
         }
-        log(QString("Passing %1 manual annotations to InferenceWorker").arg(manualBoxes.size()), "INFO");
-        // **FIX: Use m_currentMacroImgdata**
-        m_macroImgInference.thrd = new QThread(this);
-        m_macroImgInference.infWorker = new InferenceWorker(m_currentMacroImgdata.cols, m_currentMacroImgdata.rows, m_currentMacroImgdata, manualBoxes);
-        m_macroImgInference.infWorker->moveToThread(m_macroImgInference.thrd);
-        connect(m_macroImgInference.thrd, &QThread::started, m_macroImgInference.infWorker, &InferenceWorker::predictWithManualBoxes);
-        connect(m_macroImgInference.infWorker, &InferenceWorker::frameProcessed, this, &MainWindow::inferenceResult);
-        connect(m_macroImgInference.thrd, &QThread::finished, m_macroImgInference.infWorker, &QObject::deleteLater);
-        m_macroImgInference.thrd->start();
+        // Calculate a path directly from clicked annotations.
+        // No InferenceWorker object or ONNX initialization is needed.
+        m_macroImgPath = InferenceWorker::shortestPath(manualBoxes);
+
+        if (m_macroImgPath.empty()) {
+            log("No c.elegans targets selected. Select c.elegans and click a target.",
+                "WARNING");
+            return;
+        }
+
+        ImageDisplay(ARDUCAM);
+
+        log(QString("Manual path prepared: %1 targets.")
+            .arg(static_cast<int>(m_macroImgPath.size())), "INFO");
+
         return;
     }
 
