@@ -883,8 +883,6 @@ void MainWindow::setupTransformationMatrix()
     log("Macro-to-stage calibration loaded.", "INFO");
 }
 
-    log(QString("Manual path prepared: %1 targets.")
-        .arg(static_cast<int>(m_macroImgPath.size())), "INFO");
 
 void MainWindow::onPredictMacroImg() {
     // Check if manual annotations already exist
