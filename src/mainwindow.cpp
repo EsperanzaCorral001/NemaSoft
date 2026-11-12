@@ -190,7 +190,7 @@ MainWindow::MainWindow(QWidget* parent)
     // UI timer setup
     QTimer* uiUpdateTimer = new QTimer(this);
     connect(uiUpdateTimer, &QTimer::timeout, this, &MainWindow::renderLatestFrame);
-    uiUpdateTimer->start(10); // making this faster updates the ui faster
+    uiUpdateTimer->start(50); // making this faster updates the ui faster
 
 	m_UITimer.start();
 
@@ -877,7 +877,7 @@ void MainWindow::setupTransformationMatrix()
 
     m_transformMatrix = (cv::Mat_<double>(2, 3) <<
         0.332809795219, -14.6407314087, 21510.7830175,
-        15.8444688290,  0.700395734690, 131585.123327
+        15.8444688290, 0.700395734690, 131555.123327
     );
 
     log("Macro-to-stage calibration loaded.", "INFO");

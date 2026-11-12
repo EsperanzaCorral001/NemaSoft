@@ -1,12 +1,16 @@
 #ifndef LOGDISPLAY_H
 #define LOGDISPLAY_H
 
+
 #include <QWidget>
 #include <QTextEdit>
 #include <QVBoxLayout>
 #include <QPushButton>
 #include <QHBoxLayout>
 #include "logger.h" 
+
+#include <QTextDocument>
+
 class LogDisplay : public QWidget {
     Q_OBJECT
 
@@ -66,6 +70,7 @@ private:
 
         // Text edit for logs
         m_logTextEdit = new QTextEdit(this);
+        m_logTextEdit->document()->setMaximumBlockCount(1000);
         m_logTextEdit->setReadOnly(true);
         m_logTextEdit->setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;");
 
