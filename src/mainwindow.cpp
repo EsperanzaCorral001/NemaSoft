@@ -308,8 +308,8 @@ QGroupBox* MainWindow::setupMovementUI() {
 	m_Focus_cam1 = new QPushButton("Focus Cam 1");
     m_Focus_cam2 = new QPushButton("Focus Cam 2");
 	//m_homeBtn = new QPushButton("🏠");
-    m_homeBtn = new QPushButton("Home XYZ");
-    m_homeBtn->setToolTip("Find the stage home switches, in Z / Y / X order");
+    m_homeBtn = new QPushButton("Macro Home");
+    m_homeBtn->setToolTip("Return to X=109000, Y=120000, Z=18831");
 	
 
     m_leftFastBtn->setFixedSize(30, 30);
@@ -1620,44 +1620,42 @@ void MainWindow::onConfirmAdjustmentClicked() {
 	m_traverser->userConfirmedAdjustment();
 }
 
-void MainWindow::onHomeClicked() {
-    if (m_xyzStage.isHoming()) {
-        m_xyzStage.stopHoming();
-        m_homeBtn->setText("Stopping...");
-        m_homeBtn->setEnabled(false);
-        return;
-    }
-
+void MainWindow::onHomeClicked()
+{
     if (m_traverserThread) {
-        log("Finish or abort traversal before homing", "WARNING");
+        log("Finish or abort traversal before returning to macro position.",
+            "WARNING");
         return;
     }
 
-    if (!m_xyzStage.home()) return;
-
-    m_homingUiActive = true;
-
-    const QList<QWidget*> controls{
-        m_leftFastBtn, m_leftSlowBtn, m_rightFastBtn, m_rightSlowBtn,
-        m_upFastBtn, m_upSlowBtn, m_downFastBtn, m_downSlowBtn,
-        m_zUpBtn, m_zUpFastBtn, m_zDownBtn, m_zDownFastBtn,
-        m_slant1Btn, m_slant2Btn, m_slant3Btn, m_slant4Btn,
-        m_goToPositionBtn, m_Focus_cam1, m_Focus_cam2,
-        m_confirmAdjustmentBtn, m_predictMicroImg, m_trivarsePath,
-        m_abortPathBtn, m_resumePathBtn
-    };
-
-    for (auto* control : controls) {
-        if (!control) continue;
-
-        m_homingControlStates.append(
-            qMakePair(control, control->isEnabled())
-        );
-
-        control->setEnabled(false);
+    if (m_xyzStage.isHoming() ||
+        m_xyzStage.positionUncertain() ||
+        m_xyzStage.isBusy()) {
+        log("Return requires an idle stage with a valid position reference.",
+            "WARNING");
+        return;
     }
 
-    m_homeBtn->setText("Stop Home");
+    constexpr double targetX = 109000.0;
+    constexpr double targetY = 120000.0;
+    constexpr double targetZ = 18831.0;
+
+    const double currentX = globle_vars.current_x.load();
+    const double currentY = globle_vars.current_y.load();
+    const double currentZ = globle_vars.current_z.load();
+
+    // Show the requested destination in the position fields.
+    m_x1->setText(QString::number(targetX));
+    m_y1->setText(QString::number(targetY));
+    m_z1->setText(QString::number(targetZ));
+
+    // Queue separate axis moves, as the existing Go To Position does.
+    m_xyzStage.move(targetX - currentX, 0.0, 0.0);
+    m_xyzStage.move(0.0, targetY - currentY, 0.0);
+    m_xyzStage.move(0.0, 0.0, targetZ - currentZ);
+
+    log("Return to macro position queued: X=109000, Y=120000, Z=18831.",
+        "INFO");
 }
 
 void MainWindow::onTraversalFinished(const QString& message) {
